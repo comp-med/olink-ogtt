@@ -1,0 +1,70 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Thumbnails
+._*
+
+# Files that might appear on external disk
+.Spotlight-V100
+.Trashes
+.VolumeIcon.icns
+._.Trashes
+.fseventsd
+
+# Directories potentially created on remote AFP share
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# R specific files
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user
+
+# RStudio project files
+.Rproj.user/
+.Rproj.user/**
+
+# Compiled source code
+*.o
+*.so
+*.dll
+
+# R packages
+.Rcheck/
+
+# Generated documentation
+docs/
+
+# Produced files
+*.pdf
+*.html
+*.docx
+
+# Output files from R CMD build
+/*.tar.gz
+
+# Output files from R CMD check
+/*.Rcheck/
+
+# Knitr and RMarkdown
+*.utf8.md
+*.knit.md
+*.log
+*.out
+*.tex
+*.rds
+
+# R environment variables
+.Renviron
+
+# Other files to ignore
+*.RData
+*.RHistory
+*.Ruserdata
+
