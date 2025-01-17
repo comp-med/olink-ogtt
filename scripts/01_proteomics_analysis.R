@@ -23,6 +23,7 @@ require(ggpubr)
 require(RColorBrewer)
 require(ggrepel)
 require(gghighlight)
+require(scales)
 
 load("RData/01.RData")
 
@@ -105,7 +106,7 @@ for(j in 1:nrow(ogtt.norm)){
 ## check whether it worked
 sd(ogtt.dat[which(ogtt.dat$ogtt.session==1 & ogtt.dat$t.point == 0), "OID30150"], na.rm=T)
 
-write.table(ogtt.dat, "data/ogtt.dat.norm.txt", sep="\t", row.names = F)
+write.table(ogtt.dat, "output/01_ogtt.dat.norm.txt", sep="\t", row.names = F)
 
 ## separate to 2 tables
 ogtt.dat.1 <- ogtt.dat %>% filter(ogtt.session ==1)
@@ -165,8 +166,13 @@ res.ogtt.1.linear <- res.ogtt.1.linear[order(res.ogtt.1.linear$fdr.aov), ]
 res.ogtt.2.linear <- res.ogtt.2.linear[order(res.ogtt.2.linear$fdr.aov), ]
 
 ## write to file
-write.table(res.ogtt.1.linear, "data/res.ogtt.1.linear.txt", sep="\t", row.names = F)
-write.table(res.ogtt.2.linear, "data/res.ogtt.2.linear.txt", sep="\t", row.names = F)
+write.table(res.ogtt.1.linear, "output/01_res.ogtt.1.linear.txt", sep="\t", row.names = F)
+write.table(res.ogtt.2.linear, "output/01_res.ogtt.2.linear.txt", sep="\t", row.names = F)
+
+## read again
+res.ogtt.1.linear <- read.table("output/01_res.ogtt.1.linear.txt", sep="\t", header = T)
+res.ogtt.2.linear <- read.table("output/01_res.ogtt.2.linear.txt", sep="\t", header = T)
+
 
 ##########################################
 ####      Sensitivity analysis        ####
@@ -176,7 +182,7 @@ write.table(res.ogtt.2.linear, "data/res.ogtt.2.linear.txt", sep="\t", row.names
 ogtt.dat.1$t.factor       <- factor(ogtt.dat.1$t.point, levels=c("0", "15", "30", "60", "120")) 
 ogtt.dat.2$t.factor       <- factor(ogtt.dat.2$t.point, levels=c("0", "15", "30", "60", "120")) 
 
-## time point analysis
+## time point analysis, excluding sample median npx as covariate
 res.ogtt.1.sens         <- mixed.anova(ogtt.dat.1, "t.factor", prot.label$OlinkID, "+ (1|participant)")
 res.ogtt.2.sens         <- mixed.anova(ogtt.dat.2, "t.factor", prot.label$OlinkID, "+ (1|participant)")
 
@@ -194,9 +200,8 @@ res.ogtt.1.sens <- res.ogtt.1.sens[order(res.ogtt.1.sens$fdr.aov), ]
 res.ogtt.2.sens <- res.ogtt.2.sens[order(res.ogtt.2.sens$fdr.aov), ]
 
 ## Write to file
-write.table(res.ogtt.1.sens, "data/res.ogtt.1.sens.txt", sep="\t", row.names = F)
-write.table(res.ogtt.2.sens, "data/res.ogtt.2.sens.txt", sep="\t", row.names = F)
-
+write.table(res.ogtt.1.sens, "output/01_res.ogtt.1.sens.txt", sep="\t", row.names = F)
+write.table(res.ogtt.2.sens, "output/01_res.ogtt.2.sens.txt", sep="\t", row.names = F)
 
 ## Compare pvals from both methods
 compare.1 <- res.ogtt.1.sens[,c("OlinkID","Assay","Panel","fdr.aov")] %>% left_join(res.ogtt.1.linear[,c("OlinkID","fdr.aov")], by="OlinkID")
@@ -310,12 +315,9 @@ p2 <- ggplot(inc_dec, aes(t.point)) +
                           axis.text = element_text(size=12),
                           axis.title = element_text(size=16))
 
-pdf("graphics/no_of_inc_decr_prots.pdf", width=6, height =6)
+pdf("graphics/01_no_of_inc_decr_prots.pdf", width=6, height =6)
 grid.arrange(p1,p2, ncol = 2, nrow = 1)
 dev.off()
-
-write.table(inc_dec,"graphics/no_of_inc_decr_prots.txt", sep="\t", row.names = F)
-
 
 ##########################################
 ####  Plot ogtt1 v 2 scatterplot      ####
@@ -333,6 +335,7 @@ abs_max <- function(data) {
 # add as column to result df
 beta_cols1 <- res.ogtt.1.linear %>% select(starts_with("beta"))
 res.ogtt.1.linear$beta.high <- abs_max(beta_cols1)
+res.ogtt.1.linear$beta.high.tpoint <- abs_max_tpoint(beta_cols1)
 
 beta_cols2 <- res.ogtt.2.linear %>% select(starts_with("beta"))
 res.ogtt.2.linear$beta.high <- abs_max(beta_cols2)
@@ -392,6 +395,7 @@ res.ogtt.1.linear <- add_first_sig(res.ogtt.1.linear)
 significance_threshold <- 0.05/71
 res.ogtt.2.linear <- add_first_sig(res.ogtt.2.linear)
 
+
 # Combine ogtt1 and 2
 ogtt1 <-res.ogtt.1.linear[,c("OlinkID","Assay","pval.aov.t.factor","fdr.aov","beta.high","first_sig")]
 ogtt2 <-res.ogtt.2.linear[,c("OlinkID","Assay","pval.aov.t.factor","fdr.aov","beta.high","first_sig")]
@@ -403,15 +407,14 @@ ogtt.both[ogtt.both$beta.high.1 * ogtt.both$beta.high.2 < 0 &
             ogtt.both$fdr.aov.2 < 0.05, ]
 
 ## how many are significant in one OGTT and not even nominal significance in the other
-ogtt.both %>% filter(fdr.aov.1<0.05 & pval.aov.t.factor.2>0.05) %>% arrange(fdr.aov.2) %>% pull(Assay) %>% unique() %>% length()
-# "CLEC4G"    "IL17C"     "OCLN"      "IL6"       "MYBPC1"    "REN"       "PRL"       "PGA4"      "FABP2"     "IDO1"      "MYL3"      "BTLA"      "POMC"     
-# "FABP1"     "C1RL"      "RBP2"      "EFCAB14"   "IGFBP7"    "TTR"       "ADCYAP1R1" "IL1R1"     "LPL"       "FH"        "GGT1"     
+ogtt1_only <- ogtt.both %>% filter(fdr.aov.1<0.05 & pval.aov.t.factor.2>0.05)
+ogtt1_only %>% filter(abs(beta.high.1)>1.5)
 
-ogtt.both %>% filter(fdr.aov.2<0.05 & pval.aov.t.factor.1>0.05) %>% arrange(fdr.aov.1) %>% pull(Assay) %>% unique() %>% length()
-# "CPA4"     "SFRP1"    "PLA2G10"  "CELSR2"   "OMG"      "FST"      "NXPH1"    "LGMN"     "MAMDC2"   "PTPRN2"   "SIGLEC15" "APOE"     "DPP6"     "DKK4"    
-# "WARS"     "MIA"      "PSAPL1"   "NAAA"     "ISM1"     "SCT"      "SOST"     "DPT"      "MOG"      "CLEC12A"  "BGLAP"    "CNTN2"    "LY6D"     "FLT3LG"  
-# "SULT2A1"  "LRTM2"    "ADGRE5"   "MATN3"    "KLHL41"   "MCFD2"    "ANGPTL4" 
+ogtt2_only <- ogtt.both %>% filter(fdr.aov.2<0.05 & pval.aov.t.factor.1>0.05)
+ogtt2_only %>% filter(abs(beta.high.2)>1.5)
 
+ogtt_consistent <- ogtt.both %>% filter(fdr.aov.1<0.05&pval.aov.t.factor.2<0.05 | fdr.aov.2<0.05&pval.aov.t.factor.1<0.05)
+length(unique(ogtt_consistent$Assay))
 
 # point shape circle if betas have different direction & both significant
 # triangle if at least one significant increase
@@ -437,7 +440,7 @@ top.pvals <- ogtt.both %>% filter(fdr.aov.1<1e-3 | fdr.aov.2<1e-3 | (fdr.aov.1<.
 mypal <- colorRampPalette( brewer.pal( 9 , "YlOrRd" ) )
 
 # Plot - I couldnt figure out the size labels
-pdf("graphics/ogtt1_vs_2_scatter.pdf", width=8, height=8)
+svg("graphics/01_ogtt1_vs_2_scatter.svg", width=6, height=6)
 
 ggplot(ogtt.both, aes(x = -log10(fdr.aov.1), y = -log10(fdr.aov.2),
                       fill = as.factor(first.sig_comb), size=abs(beta_sig))) +
@@ -446,7 +449,7 @@ ggplot(ogtt.both, aes(x = -log10(fdr.aov.1), y = -log10(fdr.aov.2),
              ) +
   scale_fill_manual(name="Time of first change", values = mypal(9)[c(3,5,7,9)], breaks=c("15","30","60","120")) +
   labs(x = "OGTT 1 -log10(qval)", y = "OGTT 2 -log10(qval)") + 
-  geom_text_repel(data = top.pvals, aes(label = Assay), vjust = -0.5, size=3) +
+  geom_text_repel(data = top.pvals, aes(label = Assay), size=3) +
   geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "orange") +
   geom_vline(xintercept = -log10(0.05), linetype = "dashed", color = "orange") +
   scale_size_continuous(name = "Max. change") + #, labels = c("1", "4"), breaks=c(1, 4)) +
@@ -459,6 +462,28 @@ ggplot(ogtt.both, aes(x = -log10(fdr.aov.1), y = -log10(fdr.aov.2),
 
 dev.off()
 
+# Plot betas instead
+top.betas <- ogtt.both %>% filter( fdr.aov.smaller<0.05 & (abs(beta.high.1)>1 | abs(beta.high.2)>1)) 
+
+svg("graphics/01_ogtt1_vs_2_scatter_betas.svg", width=6, height=6)
+
+ggplot(ogtt.both, aes(x = beta.high.1, y = beta.high.2)) +
+  geom_point(shape=21,
+             fill=ifelse(ogtt.both$fdr.aov.smaller<0.05,"darkorange","white"),
+             alpha=ifelse(ogtt.both$fdr.aov.smaller<0.05, 1, 0.05)
+  ) +
+  labs(x = "OGTT 1 max. change", y = "OGTT 2 max. change") + 
+  geom_text_repel(data = top.betas, aes(label = Assay), size=3) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "orange") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "orange") +
+  scale_size_continuous(name = "Max. change") + #, labels = c("1", "4"), breaks=c(1, 4)) +
+  theme_minimal() +
+  theme(legend.position = c(0.9,0.25),
+        axis.text = element_text(size=10))
+
+dev.off()
+
+
 ## Get number of proteins in each quadrant
 ogtt.both %>% filter(fdr.aov.1<.05 & fdr.aov.2<.05) %>% pull(Assay) %>% unique() %>% length() # 17
 ogtt.both %>% filter(fdr.aov.1<.05 & fdr.aov.2>.05) %>% pull(Assay) %>% unique() %>% length() # 35
@@ -467,10 +492,14 @@ ogtt.both %>% filter(fdr.aov.1<.05) %>% pull(Assay) %>% unique() %>% length() #5
 
 
 ## write to file (to add beta.high and first_sig)
-write.table(res.ogtt.1.linear, "data/res.ogtt.1.linear.txt", sep="\t", row.names = F)
-write.table(res.ogtt.2.linear, "data/res.ogtt.2.linear.txt", sep="\t", row.names = F)
-write.table(ogtt.both, "data/ogtt.both.summary.txt", sep="\t", row.names = F)
+write.table(res.ogtt.1.linear, "output/01_res.ogtt.1.linear.txt", sep="\t", row.names = F)
+write.table(res.ogtt.2.linear, "output/01_res.ogtt.2.linear.txt", sep="\t", row.names = F)
+write.table(ogtt.both, "output/01_ogtt.both.summary.txt", sep="\t", row.names = F)
 
+## read from file
+res.ogtt.1.linear <- read.table("output/01_res.ogtt.1.linear.txt", sep="\t", header = T)
+res.ogtt.2.linear <- read.table("output/01_res.ogtt.2.linear.txt", sep="\t", header = T)
+ogtt.both <- read.table("output/01_ogtt.both.summary.txt", sep="\t", header = T)
 
 ##########################################
 ####  Plot ogtt1 and 2 volcano plots  ####
@@ -571,6 +600,47 @@ ogtt.both_hpa$max_ntpm_tissue <- gsub("choroid plexus", "brain", ogtt.both_hpa$m
 ogtt.both_hpa$max_ntpm_tissue <- ifelse(ogtt.both_hpa$RNA.tissue.specificity %in% c("Tissue enriched","Tissue enhanced"), ogtt.both_hpa$max_ntpm_tissue, NA)
 ogtt.both_hpa$max_ntpm_celltype <- ifelse(ogtt.both_hpa$RNA.single.cell.type.specificity %in% c("Cell type enriched","Cell type enhanced"), ogtt.both_hpa$max_ntpm_celltype, NA)
 
+ogtt.both_hpa$genes_group <- case_when( ogtt.both_hpa$Assay.x %in% c("WARS","MLN","CDSN","PYY") ~ "Differential response",
+                                        ogtt.both_hpa$fdr.aov.1<0.05 & ogtt.both_hpa$fdr.aov.2<0.05 ~ "Consistent in both",
+                                        ogtt.both_hpa$fdr.aov.1<0.05 & ogtt.both_hpa$pval.aov.t.factor.2>0.05 ~ "Only OGTT 1",
+                                        ogtt.both_hpa$fdr.aov.2<0.05 & ogtt.both_hpa$pval.aov.t.factor.1>0.05 ~ "Only OGTT 2",
+                                        TRUE ~ "Not significant")
+
+ogtt.both_hpa_long <- ogtt.both_hpa %>%
+  # Select columns that end with .1 or .2 specifically
+  select(Assay.x, max_ntpm_tissue, matches("pval.aov.t.factor.\\d|fdr.aov.\\d|beta.high.\\d")) %>%
+  pivot_longer(
+    cols = matches("pval.aov.t.factor.\\d|fdr.aov.\\d|beta.high.\\d"),
+    names_to = c(".value", "ogtt.session"),
+    names_pattern = "(.*)\\.(\\d)"
+  )
+
+ogtt.both_hpa_long$sig <- ogtt.both_hpa_long$fdr.aov<0.05
+
+protein_counts <- ogtt.both_hpa_long %>%
+  filter(!is.na(max_ntpm_tissue) & sig) %>%
+  distinct(Assay.x, max_ntpm_tissue, ogtt.session) %>%
+  count(max_ntpm_tissue, ogtt.session) %>%
+  complete(max_ntpm_tissue, ogtt.session = c("1", "2"), fill = list(n = 0)) # Add all combinations with n = 0 if missing
+
+# Calculate total proteins per tissue
+total_counts <- protein_counts %>%
+  group_by(max_ntpm_tissue) %>%
+  summarize(total_n = sum(n), .groups = "drop") %>%
+  arrange(desc(total_n))
+
+# Reorder max_ntpm_tissue factor levels based on total counts
+protein_counts <- protein_counts %>%
+  mutate(max_ntpm_tissue = factor(max_ntpm_tissue, levels = total_counts$max_ntpm_tissue))
+
+pdf("graphics/01_no_of_proteins_by_tissue.pdf", width = 6, height = 3)
+ggplot(protein_counts, aes(x = max_ntpm_tissue, y = n, fill = ogtt.session)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(y = "Number of Proteins", fill = "OGTT Session" ) +
+  theme_minimal() +
+  scale_fill_manual(values=c("#6699CC", "#CC6677")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "bottom", axis.title.x = element_blank())
+dev.off()
 
 ######### check enrichment - tissue ############################################
 
@@ -714,13 +784,13 @@ subset(res.ogtt.diff, fdr.anova_ogtt.session.t.factor < .2)$Assay
 diff.prots <- subset(res.ogtt.diff, fdr.anova_ogtt.session.t.factor < .2)$Assay
 
 ## Write to file
-write.table(res.ogtt.diff, "data/res.ogtt.diff.txt", sep="\t", row.names = F)
-
+write.table(res.ogtt.diff, "output/01_res.ogtt.diff.txt", sep="\t", row.names = F)
 
 ##########################################
 ####    Plot selected proteins        ####
 ##########################################
 
+## Prepare df for plotting
 ogtt.dat.norm_long <- rbind(ogtt.dat.1, ogtt.dat.2) %>% 
   pivot_longer(cols = all_of(oid_cols), names_to = "OlinkID", values_to = "NPX") %>%
   left_join(prot.label, by = c("OlinkID" = "OlinkID"))
@@ -735,64 +805,143 @@ ogtt.dat.norm_long <- ogtt.dat.norm_long %>%
 ogtt.dat.norm_long <- na.omit(ogtt.dat.norm_long)
 ogtt.dat.norm_long$ogtt.session <- as.factor(ogtt.dat.norm_long$ogtt.session)
 
-write.table(ogtt.dat.norm_long, "data/ogtt.dat.norm_long.txt", sep="\t", row.names = F)
+write.table(ogtt.dat.norm_long, "output/01_ogtt.dat.norm_long.txt", sep="\t", row.names = F)
 
 ################################################################################
 
-## list of significant protiens
-sig1 <- subset(res.ogtt.1.linear, fdr.aov < .05 & abs(beta.high)>1.5 ) %>% select(Assay, fdr.aov)  %>%
-  group_by(Assay) %>% filter(fdr.aov == min(fdr.aov)) %>% ungroup() %>% arrange(fdr.aov)
+## Plotting function
+plot_prots <- function(prots, ncol) {
+  
+  ## Order by lowest fdr
+  subset_df <- ogtt.both[ogtt.both$Assay %in% prots, ] %>% arrange(fdr.aov.smaller)
+  subset_df$Assay <- gsub("GCG","GLP-1",subset_df$Assay)
+  prots <- subset_df$Assay
+  
+  ogtt.dat.norm_long$Assay <- gsub("GCG","GLP-1",ogtt.dat.norm_long$Assay)
+  
+  p <- ogtt.dat.norm_long %>% filter(Assay %in% prots) %>% 
+    mutate(Assay = factor(Assay, levels = prots)) %>%
+    ggplot(aes(x=t.point,y=mean, color=ogtt.session)) +
+    geom_line(size=1, position=position_dodge(width=3)) + 
+    geom_point(size=2, position=position_dodge(width=3)) +
+    geom_errorbar(aes(x = t.point,
+                      ymin=mean-se*qt(p = 0.975, df = 10),
+                      ymax=mean+se*qt(p = 0.975, df = 10)),
+                  position=position_dodge(width=3), width=0) +
+    theme_minimal() + 
+    theme(axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          legend.position = "bottom",
+          legend.title = element_text(size=16),
+          text = element_text(size = 16, hjust = 0),
+          plot.margin = unit(c(0,1,0,1), "cm")) +
+    scale_x_continuous(breaks = c(0, 15, 30, 60, 120)) +
+    scale_color_manual(name="OGTT session",values=c("#6699CC", "#CC6677")) +
+    facet_wrap(~Assay, ncol=ncol) + #, scales = "free_y"
+    guides(colour = guide_legend(nrow = 1))
+  
+  return(p)
+  
+}
 
-sig2 <- subset(res.ogtt.2.linear, fdr.aov < .05& abs(beta.high)>1.5 ) %>% select(Assay, fdr.aov)  %>%
-  group_by(Assay) %>% filter(fdr.aov == min(fdr.aov)) %>% ungroup() %>% arrange(fdr.aov)
+## Plotting function (individual level)
+plot_prots_ind <- function(prots) {
+  
+  ## Order by lowest fdr
+  subset_df <- ogtt.both[ogtt.both$Assay %in% prots, ] %>% arrange(fdr.aov.smaller)
+  subset_df$Assay <- gsub("GCG", "GLP-1", subset_df$Assay)
+  prots <- subset_df$OlinkID
+  
+  ogtt.dat.ind <- rbind(ogtt.dat.1, ogtt.dat.2) %>% 
+    pivot_longer(cols = all_of(oid_cols), names_to = "OlinkID", values_to = "NPX") %>%
+    left_join(prot.label, by = c("OlinkID" = "OlinkID"))
+  
+  ogtt.dat.ind$Assay <- gsub("GCG", "GLP-1", ogtt.dat.ind$Assay)
+  
+  ## Calculate mean NPX for each time point and assay
+  mean_data <- ogtt.dat.ind %>%
+    filter(OlinkID %in% prots) %>%
+    group_by(t.point, Assay, ogtt.session) %>%
+    summarise(mean_NPX = mean(NPX, na.rm = TRUE), .groups = 'drop')
+  
+  ## Plot individual lines in grey
+  p <- ogtt.dat.ind %>%
+    filter(OlinkID %in% prots) %>%
+    ggplot(aes(x = t.point, y = NPX, group = participant)) +
+    geom_line(color = "grey", size = 0.3) +  # Individual lines
+    geom_line(data = mean_data, aes(x = t.point, y = mean_NPX, group = 1), 
+              color = "black", size = 1.2) +  # Mean line
+    theme_minimal() + 
+    theme(axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          text = element_text(size = 12, hjust = 0),
+          plot.margin = unit(c(0, 1, 0, 1), "cm"),
+          panel.spacing = unit(1, "lines")) +
+    scale_x_continuous(breaks = c(0, 15, 30, 60, 120)) +
+    scale_y_continuous(labels = scales::number_format(accuracy = 1)) +  # Round y-axis
+    facet_grid(cols = vars(Assay), rows = vars(ogtt.session))
+  
+  return(p)
+}
 
-################ select protein list ####################
 
-# Fig. 1 positive controls
-prots <- c("GIP","PYY")
+################################################################################
 
-# sig in both ogtt or either
-prots <- full_join(sig1,sig2,by="Assay") %>% filter(!Assay %in% diff.prots) %>% pull(Assay) # significant in both, without evidence for differential response
+## No. of proteins that change strongly on ogtt 1 and 2 separately
+ogtt.both %>% filter(abs(beta.high.1)>1.5 & fdr.aov.1<0.05) %>% pull(Assay) %>% unique() %>% length()
+ogtt.both %>% filter(abs(beta.high.2)>1.5 & fdr.aov.2<0.05) %>% pull(Assay) %>% unique() %>% length()
 
-# robust diff
-prots <- c("WARS","PYY","MLN","CDSN")
+## proteins that change significantly on both
+ogtt.both %>% filter(fdr.aov.1<0.05 & fdr.aov.2<0.05) %>% pull(Assay)
 
-# gastric mucus cells
-prots <- c("ANXA10","TFF2","AGR2","VSIG2")
+## No. of proteins that change strongly on both ogtts
+ogtt.both %>% filter(abs(beta.high.1)>1.5 & fdr.aov.1<0.05 & abs(beta.high.2)>1.5 & fdr.aov.2<0.05) %>% pull(Assay) # %>% unique() %>% length()
 
-##########################################################
+## Proteins that change strongly only in ogtt 1
+ogtt.both %>% filter(abs(beta.high.1)>1.5 & fdr.aov.1<0.05 & pval.aov.t.factor.2>0.05) #%>% pull(Assay) %>% unique() %>% length()
 
-## Order by lowest fdr
-subset_df <- ogtt.both[ogtt.both$Assay %in% prots, ] %>% arrange(fdr.aov.smaller)
-prots <- subset_df$Assay
+## Proteins that change strongly only in ogtt 2
+ogtt.both %>% filter(abs(beta.high.2)>1.5 & fdr.aov.2<0.05 & pval.aov.t.factor.1>0.05) #%>% pull(Assay) %>% unique() %>% length()
 
-## Plot selected
-#pdf("graphics/ogtt_proteins_beta_1.5.pdf", width=9, height=6)
-pdf("graphics/ogtt_proteins_diff.pdf", width=6, height=6)
+################################################################################
 
-ogtt.dat.norm_long %>% filter(Assay %in% prots) %>% 
-  mutate(Assay = factor(Assay, levels = prots)) %>%
-  ggplot(aes(x=t.point,y=mean, color=ogtt.session)) +
-  geom_line(size=1, position=position_dodge(width=3)) + 
-  geom_point(size=2, position=position_dodge(width=3)) +
-  geom_errorbar(aes(x = t.point,
-                    ymin=mean-se*qt(p = 0.975, df = 10),
-                    ymax=mean+se*qt(p = 0.975, df = 10)),
-                position=position_dodge(width=3), width=0) +
-  theme_minimal() + 
-  theme(axis.title.x = element_blank(),
-        axis.title.y = element_blank(),
-        #legend.position = c(0.95,0.15),
-        legend.position = "none",
-        legend.title = element_text(size=12),
-        text = element_text(size = 12, hjust = 0),
-        plot.margin = unit(c(0,1,0,1), "cm")) +
-  scale_x_continuous(breaks = c(0, 15, 30, 60, 120)) +
-  scale_color_manual(name="OGTT session",values=c("#6699CC", "#CC6677")) +
-  facet_wrap(~Assay, nrow=2) + #, scales = "free_y"
-  guides(colour = guide_legend(nrow = 2))
+#### Plot sets of proteins
 
+## Proteins significant in both, only 1 or only 2 (with beta >1.5)
+sig.both <- subset(ogtt.both, (fdr.aov.1<0.05 & abs(beta.high.1)>1.5 & pval.aov.t.factor.2<0.05) |
+                     (fdr.aov.2<0.05 & abs(beta.high.2)>1.5 & pval.aov.t.factor.1<0.05) ) %>%
+            filter(Assay!="PYY") %>% pull(Assay) # PYY has a differential response
+sig.1.only <- subset(ogtt.both, (fdr.aov.1<0.05 & pval.aov.t.factor.2>.05 & abs(beta.high.1)>1 ) ) %>% pull(Assay) #
+sig.2.only <- subset(ogtt.both, (fdr.aov.2<0.05 & pval.aov.t.factor.1>.05 & abs(beta.high.2)>1) ) %>% pull(Assay) # 
+
+svg("graphics/01_ogtt_consistent.svg", width = 6, height = 12)
+plot_prots(sig.both, 2) + theme(legend.position = c(0.8, 0.1))
 dev.off()
 
+plot_prots(sig.1.only,4)
+plot_prots(sig.2.only,4)
+
+svg("graphics/01_ogtt_consistent_indvdl.svg", width = 14, height = 4)
+plot_prots_ind(sig.both)
+dev.off()
+
+
+## interaction analysis
+diff_prots <- c("WARS","PYY","MLN","CDSN")
+svg("graphics/01_ogtt_diff.svg", width=6, height=6)
+plot_prots(diff_prots, 2) + theme(legend.position = "none")
+dev.off()
+
+svg("graphics/01_ogtt_diff_indvdl.svg", width=7, height=4)
+plot_prots_ind(diff_prots)
+dev.off()
+
+# genes coexpressed with anxa10 in GI and pancreas
+coexp_prots <- c("ANXA10","TFF2","AGR2","VSIG2","PLA2G10","CA9")
+svg("graphics/01_ogtt_coexp_prots.svg", width=3, height=15)
+plot_prots(coexp_prots, 1)
+dev.off()
+
+##########################################################
 
 save.image("RData/01.RData")
