@@ -1,0 +1,424 @@
+---
+title: "01_disease_coloc"
+output: html_document
+date: "2024-06-24"
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+## Set root.dir to the coloc analysis directory
+knitr::opts_knit$set(root.dir='/path/to/your/coloc/directory')
+
+```
+
+```{r packages, echo=FALSE}
+
+suppressPackageStartupMessages({
+library(readr)
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(susieR)
+library(coloc)
+library(doMC)
+library(Rfast)
+library(LDlinkR)
+library(gridExtra)
+library(grid)
+library(viridis)
+library(ieugwasr)
+})
+
+```
+
+```{r get_data_anxa}
+
+tmp   <- read.table("input/input.coloc.pipeline.txt")
+
+## Read anxa10 regenie output -CHR 1
+j     <- 1
+pheno <- tmp$V1[j]
+chr.s <- tmp$V2[j]
+pos.l <- tmp$V3[j]
+pos.s <- tmp$V4[j]
+pos.e <- tmp$V5[j]
+
+anxa <- readRDS(paste0("input/anxa10_chr", chr.s, "_res.rds"))
+anxa$SNPID_38 <- paste(anxa$CHROM, anxa$pos.hg38, anxa$ALLELE0, anxa$ALLELE1, sep="_")
+anxa$SNPID_37 <- paste(anxa$CHROM, anxa$GENPOS, anxa$ALLELE0, anxa$ALLELE1, sep="_")
+
+anxa1 <- anxa %>% filter(GENPOS < pos.e & GENPOS > pos.s) 
+
+```
+
+```{r ld_matrix}
+
+olink="ANXA10"
+
+#-----------------------------------------#
+##--            LD-matrix              --##
+#-----------------------------------------#
+
+## write list of SNPs to be queried to file
+write.table(anxa1$ID, paste("tmpdir/snplist", olink, chr.s, pos.s, pos.e, "lst", sep="."), col.names = F, row.names = F, quote = F)
+
+## snp data to be queried (positions are in build37, might differ from sentinel variant file with positions in build38)
+tmp.z        <- as.data.frame(anxa1[, c("ID", "CHROM", "GENPOS", "ALLELE0", "ALLELE1")])
+names(tmp.z) <- c("rsid", "chromosome", "position", "allele1", "allele2")
+
+## adopt chromosome if needed
+if(chr.s < 10){
+  print("tada")
+  tmp.z$chromosome <- paste0("0", tmp.z$chromosome)
+}else if(chr.s == 23){
+  tmp.z$chromosome <- "X"
+}
+
+## check for input
+print(head(tmp.z))
+
+## write to file
+write.table(tmp.z, paste("tmpdir/snpz", olink, chr.s, pos.s, pos.e, "z", sep="."), row.names = F, quote = F)
+
+## --> create master file for LDstore2 <-- ##
+
+## assign entries
+m.file      <- data.frame(z=paste("tmpdir/snpz", olink, chr.s, pos.s, pos.e, "z", sep="."),
+                          bgen=paste("tmpdir/filtered", olink, chr.s, pos.s, pos.e, "bgen", sep="."),
+                          bgi=paste("tmpdir/filtered", olink, chr.s, pos.s, pos.e, "bgen.bgi", sep="."),
+                          ld=paste("tmpdir/ld", olink, chr.s, pos.s, pos.e, "ld", sep="."),
+                          incl="<path/to/sample_incl>",  # UKB sample inclusion file
+                          n_samples=ifelse(chr.s != 23, n_autosome, n_chrX))
+
+## write to file
+write.table(m.file, paste("tmpdir/master", olink, chr.s, pos.s, pos.e, "z", sep="."), sep=";", row.names = F, quote = F)
+
+## submit the job
+system(paste("scripts/get_LD_matrix_ldstore.sh", chr.s, pos.s, pos.e, olink))
+
+## read in matrix
+ld         <- fread(paste("tmpdir/ld", olink, chr.s, pos.s, pos.e, "ld", sep="."), data.table = F)
+print(ld[1:5,1:5])
+
+```
+
+```{r function_to_process_data, echo=FALSE}
+
+## Joins each of the sumstats with the anxa regenie output
+filter_and_join <- function(df,chr,snpid_col) {
+  
+  if ("MarkerName" %in% colnames(df)) {
+    df <- separate(df, MarkerName, into = c("CHR", "POS"), sep = ":", convert = TRUE)
+  }
+  # add snp id
+  df <- df %>% mutate(Allele1 = toupper(Allele1), Allele2 = toupper(Allele2))
+  df$SNPID <- paste(df$CHR, df$POS, df$Allele1, df$Allele2, sep="_")
+  df$SNPID2 <- paste(df$CHR, df$POS, df$Allele2, df$Allele1, sep="_")
+  
+  joined_df1 <- anxa %>% left_join(df, by = setNames("SNPID", snpid_col), suffix = c("_anxa","")) # n = 749 nonNA
+  joined_df1$SNPID2 <- NULL
+  
+  # Identify rows in anxa_1 that did not match in the first join
+  unmatched <- joined_df1 %>% filter(is.na(CHR)) 
+  
+  # Perform a second join on SNPID2 for unmatched rows
+  joined_df2 <- unmatched[,1:18] %>%
+    #select(-starts_with("df_")) %>% # remove columns from df to avoid duplication
+    inner_join(df, by = setNames("SNPID2", snpid_col), suffix = c("_anxa","")) # 1,016 nonNA
+  
+  # Reverse the effect direction if matched on snpid2
+  joined_df2$SNPID <- NULL
+  unmatched2 <- joined_df2 %>% filter(is.na(CHR)) # n=184
+  joined_df2 <- joined_df2 %>% filter(!is.na(CHR))
+  joined_df2$Effect <- -joined_df2$Effect
+
+  # Combine the results
+  joined_df <- rbind(joined_df1[!is.na(CHR),], joined_df2, unmatched2) # n=1949, incl. unmatched
+  return(joined_df)
+}
+```
+
+```{r get_process_data_gc, echo=FALSE}
+
+# Get files in the directory - these are the sumstats for gastric cancer and subtypes from Schumacher et al
+files <- list.files("data/gc", full.names = T)
+files <- files[grep("\\.txt$", files)]
+
+# Loop through each file, read into a data frame, and assign to a variable with corresponding name
+for (file in files) {
+  df_name <- gsub(".txt", "", file)
+  df_name <- gsub("data/gc/", "", df_name)
+  file_data <- read.table(file, header = TRUE, stringsAsFactors = FALSE)
+  
+  # Add case and control numbers (from paper)
+  file_data <- file_data %>% mutate(
+        cases = case_when(startsWith(df_name, "GC") ~ 5815,
+                          startsWith(df_name, "Cardia") ~ 1291,
+                          startsWith(df_name, "NonCardia") ~ 3183,
+                          startsWith(df_name, "Diffuse") ~ 1308,
+                          startsWith(df_name, "Intestinal") ~ 1696,
+                          TRUE ~ NA),
+        controls = 10999)
+  
+  # Swap the names of the columns "Allele1" and "Allele2" - checked in Table 1 of paper and direction is reversed
+  names(file_data)[names(file_data) == "Allele1"] <- "TemporaryCol"
+  names(file_data)[names(file_data) == "Allele2"] <- "Allele1"
+  names(file_data)[names(file_data) == "TemporaryCol"] <- "Allele2"
+  assign(df_name, file_data)
+}
+
+df_names <- c("GC","Cardia","NonCardia","Diffuse","Intestinal")
+
+## chr1
+dfs_1 <- list(GC_chr1,Cardia_chr1,NonCardia_chr1,Diffuse_chr1,Intestinal_chr1)
+all_dfs_1 <- lapply(dfs_1, filter_and_join, 1, "SNPID_38")
+names(all_dfs_1) <- df_names
+
+```
+
+```{r get_process_data_gp, echo=FALSE}
+
+## gastric polyp from Sakue et al - chr1
+GP_chr1 <- fread("data/gp_eur_chr1.txt")
+GP_chr1 <- GP_chr1[,c("CHR","POS","rsid","Allele1","Allele2","AF_Allele2","N","BETA","SE","p.value")]
+colnames(GP_chr1) <- c("CHR","POS","ID","Allele1","Allele2","EAF","N","Effect","StdErr","P.value")
+GP_chr1$cases <- n_cases
+GP_chr1$controls <- n_controls
+gp_df_1 <- filter_and_join(GP_chr1,1,"SNPID_37") 
+all_dfs_1[["GP"]] <- gp_df_1
+
+```
+
+```{r get_process_data_pud, echo=FALSE}
+
+##https://www.nature.com/articles/s41467-021-21280-7 #
+
+pud <- read.table("data/pud/1_PUD_summary", sep="\t", header=T)
+
+pud_joined <- pud %>% inner_join(anxa,by=c("SNP"="ID"))
+ 
+pud_chr1 <- pud_joined[,c("CHROM","GENPOS","SNP","A1","A2","freq","N.x","b","se","p")]
+colnames(pud_chr1) <- c("CHR","POS","ID","Allele1","Allele2","EAF","N","Effect","StdErr","P.value")
+pud_chr1$cases <- n_cases ## (see phenotype definition in publication https://www.nature.com/articles/s41467-021-21280-7)
+pud_chr1$controls <- n_controls
+pud_df_1 <- filter_and_join(pud_chr1,1,"SNPID_37") 
+all_dfs_1[["PUD"]] <- pud_df_1
+
+```
+
+```{r get_process_data_ppp}
+
+# Get files in the directory
+files <- list.files("data/ppp", full.names = T)
+files1 <- files[grep("\\chr1.txt$", files)] ## n=33
+
+dfs_1 <- list()
+
+for (file in files1) {
+  df_name <- gsub("_eur_chr1.txt", "", file)
+  df_name <- gsub("data/ppp/", "", df_name)
+  file_data <- read.table(file, header = TRUE, stringsAsFactors = FALSE)
+  dfs_1[[df_name]] <- file_data
+}
+
+# Function to process dfs
+process_ppp <- function(df) {
+  df$ID <- NULL
+  colnames(df) <- c("CHR","POS","Allele1","Allele2","EAF","INFO","N","TEST","Effect","StdErr","CHISQ","LOG10P","EXTRA")
+  df$P.value <- 10^(-df$LOG10P)
+  df$LOG10P <- NULL
+  return(df)
+}
+
+## get df names
+df_names <- gsub("data/ppp/", "", files1)
+df_names <- gsub("_eur_chr1.txt", "", df_names)
+df_names <- toupper(df_names)
+
+## chr 1
+ppp_dfs_1 <- lapply(dfs_1, process_ppp)
+ppp_dfs_1 <- lapply(ppp_dfs_1, filter_and_join,1,"SNPID_38")
+names(ppp_dfs_1) <- df_names
+all_dfs_1 <- c(all_dfs_1,ppp_dfs_1)
+
+
+```
+
+```{r coloc_binary}
+
+## Binary outcomes - chr1
+
+coloc.cc <- as.data.frame(matrix(NA,nrow=0,ncol=8))
+
+## Get ld matrix (common snps)
+
+ld <- fread(paste("tmpdir/ld.ANXA10.1.ld", sep="."), data.table = FALSE)
+snplist <- read.table(paste("tmpdir/snplist.ANXA10.1.lst", sep="."), sep="\t", header = F)
+all_dfs <- all_dfs_1
+leadsnp="rs2990223"
+
+ld$SNPID <- snplist$V1
+colnames(ld) <- c(snplist$V1,"SNPID")
+
+for (i in 1:8) {
+  
+  pheno <- names(all_dfs)[i]
+  print(pheno)
+  
+  ## GC format
+  gc_format <- all_dfs[[i]]
+  gc_format <- gc_format %>% filter(!is.na(CHR))
+  #effects <- gc_format[ID==leadsnp,c(BETA,Effect)]
+  effects <- gc_format[ID==leadsnp,c(BETA,SE,Effect,StdErr,P.value)]
+
+  
+  ## remove snps from ld matrix if not in df
+  snps_to_keep <- intersect(snplist$V1,gc_format$ID)
+
+  # Remove rows where the specified values are present
+  ld_cleaned <- ld %>%
+    filter(SNPID %in% snps_to_keep)
+  # Remove columns where the specified values are present
+  ld_cleaned <- ld_cleaned %>%
+    select(one_of(snps_to_keep))
+  ld_cleaned$SNPID <- NULL
+  
+  ## ANXA10 formatting
+  anxa_format <- gc_format
+  anxa_format$varbeta <- anxa_format$SE**2
+  colnames(ld_cleaned) <- anxa_format$SNPID_37
+  rownames(ld_cleaned) <- anxa_format$SNPID_37
+  
+  anxa_format <- list(  
+    beta = anxa_format$BETA,  
+    varbeta = anxa_format$varbeta,  
+    snp = anxa_format$SNPID_37,  
+    position = anxa_format$POS,
+    type = "quant",  
+    N = mean(anxa_format$N),  
+    MAF = anxa_format$A1FREQ, 
+    LD = as.matrix(ld_cleaned) )
+  
+  #str(anxa_format)
+  #check_dataset(anxa_format)
+  #plot_dataset(anxa_format)
+  
+  ##### GC formatting
+  gc_format$varbeta <- gc_format$StdErr**2
+  gc_format <- list(
+    beta = gc_format$Effect,
+    varbeta = gc_format$varbeta,
+    snp = gc_format$SNPID_37,
+    position = gc_format$POS,
+    type = "cc",
+    N = mean(gc_format$cases+gc_format$controls),
+    s = mean(gc_format$cases/ (gc_format$cases+gc_format$controls) ),
+    #MAF = coalesce(gc_format$AF_Allele2_UKB,gc_format$AF_Allele2_FG),
+    LD = as.matrix(ld_cleaned)
+  )
+  #str(gc_format)
+  #check_dataset(gc_format)
+  #plot_dataset(gc_format)
+  
+  ## Coloc
+  coloc.anxa_gc <- coloc.abf(anxa_format, gc_format, p12=5e-6)
+  coloc.summ <- coloc.anxa_gc$summary
+  coloc.cc <- rbind(coloc.cc,c(pheno, effects, coloc.summ))
+  
+}
+
+colnames(coloc.cc) <- c("pheno","effect_anxa","se_anxa","effect_disease","se_disease","pval_disease","N","PP.H0","PP.H1","PP.H2","PP.H3","PP.H4")
+
+```
+
+```{r coloc_quantitative, echo=FALSE}
+
+coloc.qu <- as.data.frame(matrix(NA,nrow=0,ncol=12))
+
+# ##### Continuous - chr1
+ld <- fread(paste("tmpdir/ld.ANXA10.1.ld", sep="."), data.table = FALSE)
+snplist <- read.table(paste("tmpdir/snplist.ANXA10.1.lst", sep="."), sep="\t", header = F)
+all_dfs <- all_dfs_1
+leadsnp="rs2990223"
+
+################################################################################
+
+ld$SNPID <- snplist$V1
+colnames(ld) <- c(snplist$V1,"SNPID")
+
+for (i in 9:41) {
+  
+  pheno <- names(all_dfs)[i]
+  print(pheno)
+  
+  ## GC format
+  gc_format <- all_dfs[[i]]
+  gc_format <- gc_format %>% filter(!is.na(CHR))
+  
+  ## store effects
+  effects <- gc_format[ID==leadsnp,c(BETA,SE,Effect,StdErr,P.value)]
+  
+  ## remove snps from ld matrix if not in df
+  snps_to_keep <- intersect(snplist$V1,gc_format$ID)
+
+  # Remove rows where the specified values are present
+  ld_cleaned <- ld %>%
+    filter(SNPID %in% snps_to_keep)
+  
+  # Remove columns where the specified values are present
+  ld_cleaned <- ld_cleaned %>%
+    select(one_of(snps_to_keep))
+  ld_cleaned$SNPID <- NULL
+  
+  # Remove from df if not in ld matrix
+  gc_format <- gc_format[(gc_format$ID %in% snps_to_keep),]
+  
+  ## ANXA10 formatting
+  anxa_format <- gc_format
+  anxa_format$varbeta <- anxa_format$SE**2
+  colnames(ld_cleaned) <- anxa_format$SNPID_37
+  rownames(ld_cleaned) <- anxa_format$SNPID_37
+  
+  anxa_format <- list(  
+    beta = anxa_format$BETA,  
+    varbeta = anxa_format$varbeta,  
+    snp = anxa_format$SNPID_37,  
+    position = anxa_format$POS,
+    type = "quant",  
+    N = mean(anxa_format$N),  
+    MAF = anxa_format$A1FREQ, 
+    LD = as.matrix(ld_cleaned) )
+  
+  #str(anxa_format)
+  #check_dataset(anxa_format)
+  #plot_dataset(anxa_format)
+  
+  ##### GC formatting
+  gc_format$varbeta <- gc_format$StdErr**2
+  gc_format <- list(
+    beta = gc_format$Effect,
+    varbeta = gc_format$varbeta,
+    snp = gc_format$SNPID_37,
+    position = gc_format$POS,
+    type = "quant",
+    N = mean(gc_format$N),
+    MAF = gc_format$A1FREQ,
+    LD = as.matrix(ld_cleaned)
+  )
+  #str(gc_format)
+  #check_dataset(gc_format)
+  #plot_dataset(gc_format)
+  
+  ## Coloc
+  coloc.anxa_gc <- coloc.abf(anxa_format, gc_format, p12=5e-6)
+  coloc.summ <- coloc.anxa_gc$summary
+  coloc.qu <- rbind(coloc.qu,c(pheno, effects, coloc.summ))
+  
+}
+
+colnames(coloc.qu) <- c("pheno","effect_anxa","se_anxa","effect_biomkr","se_biomkr","pval_biomkr","N","PP.H0","PP.H1","PP.H2","PP.H3","PP.H4")
+coloc.qu[2:12] <- lapply(coloc.qu[2:12], function(x) as.numeric(as.character(x)))
+
+```
