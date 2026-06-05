@@ -117,7 +117,7 @@ filter_and_join <- function(df,chr,snpid_col) {
   df$SNPID <- paste(df$CHR, df$POS, df$Allele1, df$Allele2, sep="_")
   df$SNPID2 <- paste(df$CHR, df$POS, df$Allele2, df$Allele1, sep="_")
   
-  joined_df1 <- anxa %>% left_join(df, by = setNames("SNPID", snpid_col), suffix = c("_anxa","")) # n = 749 nonNA
+  joined_df1 <- anxa %>% left_join(df, by = setNames("SNPID", snpid_col), suffix = c("_anxa","")) 
   joined_df1$SNPID2 <- NULL
   
   # Identify rows in anxa_1 that did not match in the first join
@@ -126,16 +126,16 @@ filter_and_join <- function(df,chr,snpid_col) {
   # Perform a second join on SNPID2 for unmatched rows
   joined_df2 <- unmatched[,1:18] %>%
     #select(-starts_with("df_")) %>% # remove columns from df to avoid duplication
-    inner_join(df, by = setNames("SNPID2", snpid_col), suffix = c("_anxa","")) # 1,016 nonNA
+    inner_join(df, by = setNames("SNPID2", snpid_col), suffix = c("_anxa","")) 
   
   # Reverse the effect direction if matched on snpid2
   joined_df2$SNPID <- NULL
-  unmatched2 <- joined_df2 %>% filter(is.na(CHR)) # n=184
+  unmatched2 <- joined_df2 %>% filter(is.na(CHR)) 
   joined_df2 <- joined_df2 %>% filter(!is.na(CHR))
   joined_df2$Effect <- -joined_df2$Effect
 
   # Combine the results
-  joined_df <- rbind(joined_df1[!is.na(CHR),], joined_df2, unmatched2) # n=1949, incl. unmatched
+  joined_df <- rbind(joined_df1[!is.na(CHR),], joined_df2, unmatched2) 
   return(joined_df)
 }
 ```
@@ -210,9 +210,9 @@ all_dfs_1[["PUD"]] <- pud_df_1
 
 ```{r get_process_data_ppp}
 
-# Get files in the directory
+# Get files in the directory (already downloaded chr1 sumtats from UKB-PPP)
 files <- list.files("data/ppp", full.names = T)
-files1 <- files[grep("\\chr1.txt$", files)] ## n=33
+files1 <- files[grep("\\chr1.txt$", files)]
 
 dfs_1 <- list()
 
